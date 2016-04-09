@@ -31,3 +31,11 @@ node_modules
 
 # Optional REPL history
 .node_repl_history
+
+# Uploads
+uploads
+
+# Database Files
+jobs.json
+slaves.json
+frames.json

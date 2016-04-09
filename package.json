@@ -1,0 +1,19 @@
+{
+  "name": "render2",
+  "version": "0.0.2",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "zyacir",
+  "license": "ISC",
+  "dependencies": {
+    "async": "^2.0.0-rc.3",
+    "body-parser": "^1.15.0",
+    "express": "^4.13.4",
+    "multer": "^1.1.0",
+    "nedb": "^1.8.0",
+    "querystring": "^0.2.0"
+  }
+}
