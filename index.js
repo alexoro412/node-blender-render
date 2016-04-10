@@ -5,7 +5,7 @@ const bodyParser = require('body-parser');
 const querystring = require('querystring');
 const http = require('http');
 const async = require('async');
-
+const fs = require('fs');
 var app = express();
 
 var jobs = new nedb({
@@ -18,16 +18,12 @@ var slaves = new nedb({
 	autoload: true
 });
 
-slaves.update({busy:true}, {$set:{busy:false}});
-
+//slaves.update({busy:true}, {$set:{busy:false}});
+slaves.remove({});
 var frames = new nedb({
 	filename: './frames.json',
 	autoload: true
 });
-
-var attachedSlaves = 0;
-var framesRequested = 0;
-var dispatchedFrames = 0;
 
 jobs.ensureIndex({ fieldName: 'filename', unique: true}, function(err){
 	if(err){
@@ -119,7 +115,7 @@ app.post('/register_slave', function(req, res){
 			res.end(JSON.stringify({err:err}));
 		}else{
 			res.end(JSON.stringify(newDoc));
-			attachedSlaves ++;
+			dispatch();
 		}
 	});
 });
@@ -132,17 +128,17 @@ function dispatch(){
 		if(count <= 0) return;
 		console.log("here");
 		slaves.find({busy:false}, function(err, slaves_list){
-			if(slaves_list.length <= 0) return;
-			
+			if(slaves_list.length <= 0 || slaves_list == null|| err) return;
+			console.log("sl: " + slaves_list);
 			jobs.find({ finished:false, $where: function() {return this.requested.length > 0} }, function(err, jobs_list){
 				
-				console.log(err);
-				console.log(jobs_list);
-
 				var dispatching = true;
 				var i = 0; // job number
 				
-				while(dispatching){
+				num_jobs = jobs_list.length;
+
+				async.whilst( function() { return slaves_list.length > 0 && i < jobs_list.length && dispatching},
+					function(next){
 					var frame = jobs_list[i].requested.pop();
 					var slave = slaves_list.pop();
 					jobs_list[i].inprogress.push(frame);
@@ -158,20 +154,26 @@ function dispatch(){
 					slave.jobs.push({ id:jobs_list[i].filename, frame:frame });
 					slaves.update({ id:slave.id}, slave, {}, function(){
 					});
-
 					if(jobs_list[i].requested.length <= 0){
-						jobs.update({ filename:jobs[i].filename }, jobs[i], {}, function(){
+						console.log(i);
+						jobs.update({ filename:jobs_list[i].filename }, jobs_list[i], {}, function(){
 							// updated
 						});
-						console.log("moving on from job " + jobs[i].filename);
+						console.log("moving on from job " + jobs_list[i].filename);
 						i++;
+						if(i >= jobs_list.length) return;
 					}
 					
-					if(slaves_list.length === 0){
+					if(slaves_list.length <= 0){
+						console.log("-----------------------------");
 						dispatching = false;
-						break;
 					}
-				}
+					next();
+					}, 
+					function(err){
+						if(err) console.log(err);
+						console.log("///////////");
+					});
 
 				console.log("finished dispatching");
 
@@ -184,10 +186,15 @@ function dispatch(){
 	});
 }
 
-app.post("/finished", function(req, res){
-	slaves.update({id:req.body.id}, {busy:false},{},function(){
-		
+app.post("/finished", upload.single('file'), function(req, res){
+	fs.rename(req.file.path, 'uploads/' + req.file.originalname, (err) => {
+		if(err) console.log(err);
 	});
+	console.log("slave " + req.body.id + " finished");
+	slaves.update({id:req.body.id}, {$set:{busy:false}},{},function(){
+		dispatch();	
+	});
+	res.end("U");
 });
 
 function dispatchFrame(fileID, frame, slaveID){
