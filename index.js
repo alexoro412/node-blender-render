@@ -156,6 +156,7 @@ function dispatch(){
 					});
 					if(jobs_list[i].requested.length <= 0){
 						console.log(i);
+						console.log(JSON.stringify(jobs_list[i]));
 						jobs.update({ filename:jobs_list[i].filename }, jobs_list[i], {}, function(){
 							// updated
 						});
@@ -173,13 +174,12 @@ function dispatch(){
 					function(err){
 						if(err) console.log(err);
 						console.log("///////////");
+						jobs.update({ filename:jobs_list[i].filename }, jobs_list[i], {}, function(){});
 					});
 
 				console.log("finished dispatching");
 
-				jobs.update({ filename:jobs_list[i].filename }, jobs_list[i], {}, function(){
 					// update last job if it didn't get updated when switching to the next job
-				});
 				
 			});
 		});
