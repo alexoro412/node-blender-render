@@ -7,6 +7,14 @@ const fs = require('fs');
 const app = express();
 const request = require('request');
 const zpad = require('zpad');
+const needle = require('needle');
+
+
+var this_port = 8081;
+var this_address = "127.0.0.1";
+var this_id = "slave1";
+
+var masterurl = "127.0.0.1:8080/register_slave";
 
 var files = new nedb({
 	file:'./me.json',
@@ -68,12 +76,14 @@ function render(id, frame){
 
 			var form = req.form();
 			form.append('file', fs.createReadStream(doc.id + '_' + zpad(frame, 4) + '.png'));
-			form.append('id', 3);
+			form.append('id', this_id);
 			req.on('end', () => {console.log("D")});
 		});
 	});
 }
 
-app.listen(8081, function(){
+app.listen(this_port, function(){
 	console.log(":D");
+
+	needle.post(masterurl, {id:this_id, address:this_address, port:this_port}, {}, function(err,resp){if(err) console.log(err);});
 });

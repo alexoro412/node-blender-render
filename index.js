@@ -6,6 +6,7 @@ const querystring = require('querystring');
 const http = require('http');
 const async = require('async');
 const fs = require('fs');
+const needle = require('needle');
 var app = express();
 
 var jobs = new nedb({
@@ -19,11 +20,11 @@ var slaves = new nedb({
 });
 
 //slaves.update({busy:true}, {$set:{busy:false}});
-slaves.remove({});
-var frames = new nedb({
-	filename: './frames.json',
-	autoload: true
-});
+slaves.remove({}, {multi:true});
+//var frames = new nedb({
+//	filename: './frames.json',
+//	autoload: true
+//});
 
 jobs.ensureIndex({ fieldName: 'filename', unique: true}, function(err){
 	if(err){
@@ -101,6 +102,12 @@ app.post('/render', function(req, res){
 
 });
 
+function slaveConnect(id, online){
+	slaves.update({id:id}, {$set:{online:online}}, {}, function(err){
+		if(err) console.log(err);
+	});
+}
+
 app.post('/register_slave', function(req, res){
 	var slave = {
 		id: req.body.id,
@@ -108,10 +115,12 @@ app.post('/register_slave', function(req, res){
 		address:req.body.address,
 		port:req.body.port,
 		busy:false,
+		online:true,
 	};
 
 	slaves.insert(slave, function(err, newDoc){
 		if(err){
+			// TODO if uniqueViolated, simply update the slave
 			res.end(JSON.stringify({err:err}));
 		}else{
 			res.end(JSON.stringify(newDoc));
@@ -123,13 +132,10 @@ app.post('/register_slave', function(req, res){
 function dispatch(){
 	// while dispatchedFrames < attachedSlaves
 	// dispatch a random frame
-	console.log("here 2");
 	jobs.count({finished:false, $where: function(){return this.requested.length > 0}}, function(err, count){
 		if(count <= 0) return;
-		console.log("here");
 		slaves.find({busy:false}, function(err, slaves_list){
 			if(slaves_list.length <= 0 || slaves_list == null|| err) return;
-			console.log("sl: " + slaves_list);
 			jobs.find({ finished:false, $where: function() {return this.requested.length > 0} }, function(err, jobs_list){
 				
 				var dispatching = true;
@@ -194,39 +200,24 @@ app.post("/finished", upload.single('file'), function(req, res){
 	slaves.update({id:req.body.id}, {$set:{busy:false}},{},function(){
 		dispatch();	
 	});
+	// TODO
 	res.end("U");
 });
 
 function dispatchFrame(fileID, frame, slaveID){
-	slaves.findOne({id:slaveID}, function(err, doc){
-		slaves.update({ id:slaveID }, {$push : {jobs: parseInt(frame, 10)}}, {}, function(){
-		});
-
-		var post_data = querystring.stringify({
-			'id':fileID,
-			'frame':frame,
-		});
-
-		var post_options = {
-			host: doc.address,
-			port: doc.port,
-			path: '/render',
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/x-www-form-urlencoded',
-				'Content-Length': Buffer.byteLength(post_data)
-			}
+	slaves.findOne({id:slaveID}, function(err, doc){	
+		var data = {
+			id:fileID,
+			frame:frame,
 		};
-
-		var post_req = http.request(post_options, function(res){
-			res.setEncoding('utf8');
-			res.on('data', function(chunk){
-				console.log('Response: ' + chunk);
-			});
+		console.log(doc.address + ":" + doc.port + " | " + slaveID)
+		needle.post(doc.address + ":" + doc.port + "/render", data, {}, function(err, resp){
+			if(err){
+				console.log(err);
+				slaves.update({ id:slaveID }, {$set : {online:false}}, {}, function(){});
+				jobs.update({ filename:fileID }, {$push : {requested:frame}});
+			}
 		});
-		
-		post_req.write(post_data);
-		post_req.end();
 	});
 }
 
@@ -234,9 +225,4 @@ app.listen(8080, function(){
 	console.log("IT WORKS!!!");
 	dispatch();
 });
-
-
-
-
-
 
