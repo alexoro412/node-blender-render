@@ -7,6 +7,7 @@ const http = require('http');
 const async = require('async');
 const fs = require('fs');
 const needle = require('needle');
+const zpad = require('zpad');
 var app = express();
 
 var jobs = new nedb({
@@ -46,6 +47,44 @@ app.use(express.static('uploads'));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true}));
 
+function doubleCheck(id){
+	console.log("checking " + id);
+	jobs.findOne({filename:id}, function(err, newDoc){
+		//for(var i = newDoc.requested[0]; i < newDoc.requested[-1]; i+= newDoc.requested[1]-newDoc.requested[0]){
+	//	if(newDoc.inprogress.length > 0) return;
+		var i = 0;
+		console.log("found " + id);
+		async.whilst(
+			function(){
+				return i < newDoc.requested.length;
+			},
+			function(callback){
+				var frame = newDoc.requested[i];
+				var path = "./uploads/" + newDoc.filename + "_" + zpad(frame, 4) + ".png";
+					try{
+					fs.accessSync(path, fs.F_OK, (err) => {
+						if(err){
+							console.err("there was error: ", err);
+							db.update({filename:id}, {$push:{requested_poppable:frame}});
+							console.log("frame " + frame + " not completed... oops... try again");
+						}else{
+							console.log("fine");
+						}
+					});
+					}catch(e){
+						jobs.update({filename:id}, {$push:{requested_poppable:frame}});
+						console.log("frame " + frame + " for job " + id + " must be retried");
+					}
+				i++;
+				callback(null);
+			},
+			function(err){
+				dispatch();
+			}
+		);			
+	});
+}
+
 app.get('/', function(req, res){
 	res.end(JSON.stringify({api_status: 'ok', api_version: '0.0.2'}));
 });
@@ -57,9 +96,9 @@ app.get('/get_file', function(req, res){
 app.post('/add_file', upload.single('file'), function(req, res, next){
 	req.file.finished = false;
 	req.file.requested = [];
+	req.file.requested_poppable = [];
 	req.file.inprogress = [];
 	req.file.result = [];
-	req.file.framemap = [];
 	jobs.insert(req.file);
 	var response = {
 		id: req.file.filename
@@ -84,7 +123,7 @@ app.post('/render', function(req, res){
 		function(err){
 			console.log('f: ' + framelist);
 			
-			jobs.update({ filename:req.body.id }, {$set:{requested:framelist}}, {}, function(){
+			jobs.update({ filename:req.body.id }, {$push:{requested:{$each:framelist}, requested_poppable:{$each:framelist}}}, {}, function(){
 				dispatch();
 			});
 		}
@@ -132,11 +171,14 @@ app.post('/register_slave', function(req, res){
 function dispatch(){
 	// while dispatchedFrames < attachedSlaves
 	// dispatch a random frame
-	jobs.count({finished:false, $where: function(){return this.requested.length > 0}}, function(err, count){
+																												// some jobs left to dispatch
+	jobs.count({finished:false, $where: function(){return (this.inprogress.length + this.result.length) < (this.requested.length)}}, function(err, count){
+		console.log("jobs count: " + count);
 		if(count <= 0) return;
 		slaves.find({busy:false}, function(err, slaves_list){
+			console.log("slaves count: " + slaves_list.length);
 			if(slaves_list.length <= 0 || slaves_list == null|| err) return;
-			jobs.find({ finished:false, $where: function() {return this.requested.length > 0} }, function(err, jobs_list){
+			jobs.find({ finished:false, $where: function() {return (this.inprogress.length + this.result.length) < (this.requested.length)} }, function(err, jobs_list){
 				
 				var dispatching = true;
 				var i = 0; // job number
@@ -145,10 +187,9 @@ function dispatch(){
 
 				async.whilst( function() { return slaves_list.length > 0 && i < jobs_list.length && dispatching},
 					function(next){
-					var frame = jobs_list[i].requested.pop();
+					var frame = jobs_list[i].requested_poppable.pop();
 					var slave = slaves_list.pop();
 					jobs_list[i].inprogress.push(frame);
-					jobs_list[i].framemap.push({frame: slave.id});
 					var id = jobs_list[i].filename;
 
 					// POST /render {frame, id} to slave
@@ -160,15 +201,20 @@ function dispatch(){
 					slave.jobs.push({ id:jobs_list[i].filename, frame:frame });
 					slaves.update({ id:slave.id}, slave, {}, function(){
 					});
-					if(jobs_list[i].requested.length <= 0){
+					if(jobs_list[i].requested_poppable.length <= 0){
 						console.log(i);
 						console.log(JSON.stringify(jobs_list[i]));
+						var id = jobs_list[i].filename;
 						jobs.update({ filename:jobs_list[i].filename }, jobs_list[i], {}, function(){
 							// updated
+							doubleCheck(id);
 						});
 						console.log("moving on from job " + jobs_list[i].filename);
 						i++;
-						if(i >= jobs_list.length) return;
+						if(i >= jobs_list.length){
+							i--;
+							return;
+						}
 					}
 					
 					if(slaves_list.length <= 0){
@@ -180,6 +226,7 @@ function dispatch(){
 					function(err){
 						if(err) console.log(err);
 						console.log("///////////");
+						if(jobs_list.length > 0)
 						jobs.update({ filename:jobs_list[i].filename }, jobs_list[i], {}, function(){});
 					});
 
@@ -198,7 +245,17 @@ app.post("/finished", upload.single('file'), function(req, res){
 	});
 	console.log("slave " + req.body.id + " finished");
 	slaves.update({id:req.body.id}, {$set:{busy:false}},{},function(){
-		dispatch();	
+		jobs.findOne({filename:req.body.job_id}, function(err, j){
+			var indexOfFinishedFrame = j.inprogress.indexOf(req.body.frame);
+			j.result.push(j.inprogress.splice(indexOfFinishedFrame, 1)[0]);
+			console.log("moved frame to result " + req.body.frame);
+			jobs.update({filename:req.body.job_id}, j, {}, function(err){
+				dispatch();
+				doubleCheck(req.body.job_id);
+			});
+		});
+		//dispatch();
+		//doubleCheck(req.body.job_id);	
 	});
 	// TODO
 	res.end("U");
@@ -215,7 +272,7 @@ function dispatchFrame(fileID, frame, slaveID){
 			if(err){
 				console.log(err);
 				slaves.update({ id:slaveID }, {$set : {online:false}}, {}, function(){});
-				jobs.update({ filename:fileID }, {$push : {requested:frame}});
+				jobs.update({ filename:fileID }, {$push : {requested:frame, requested_poppable:frame}});
 			}
 		});
 	});

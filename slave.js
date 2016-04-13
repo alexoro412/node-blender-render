@@ -77,6 +77,8 @@ function render(id, frame){
 			var form = req.form();
 			form.append('file', fs.createReadStream(doc.id + '_' + zpad(frame, 4) + '.png'));
 			form.append('id', this_id);
+			form.append('job_id', id);
+			form.append('frame', frame);
 			req.on('end', () => {console.log("D")});
 		});
 	});
